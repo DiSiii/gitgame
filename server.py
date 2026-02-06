@@ -19,7 +19,7 @@ def init_db():
                 id TEXT PRIMARY KEY,
                 name TEXT,
                 last_move_date TEXT,
-                provinces TEXT  -- JSON: {"capital": "...", "others": [...]}
+                provinces TEXT
             )
         """)
         conn.commit()
@@ -62,12 +62,10 @@ def submit_move():
     conn = sqlite3.connect(DB_FILE)
     cur = conn.cursor()
 
-    # Проверяем, существует ли игрок
     cur.execute("SELECT * FROM players WHERE id = ?", (player_id,))
     row = cur.fetchone()
 
     if row is None:
-        # НОВЫЙ ИГРОК: должен выбрать провинции
         action = data.get("action", {})
         if action.get("type") != "claim_start_provinces":
             conn.close()
@@ -80,7 +78,27 @@ def submit_move():
             conn.close()
             return jsonify({"error": "Требуется столица и ровно 2 соседние провинции"}), 400
 
-        # Сохраняем провинции как JSON
+        # Собираем все провинции
+        all_provinces = [capital] + others
+
+        # Проверяем, не заняты ли они
+        cur.execute("SELECT provinces FROM players")
+        all_rows = cur.fetchall()
+        occupied = set()
+        for r in all_rows:
+            if r[0]:
+                try:
+                    p_data = json.loads(r[0])
+                    occupied.add(p_data["capital"])
+                    occupied.update(p_data["others"])
+                except:
+                    pass
+
+        conflict = [p for p in all_provinces if p in occupied]
+        if conflict:
+            conn.close()
+            return jsonify({"error": f"Провинции уже заняты: {', '.join(conflict)}"}), 400
+
         provinces_data = {
             "capital": str(capital),
             "others": [str(p) for p in others]
@@ -97,7 +115,6 @@ def submit_move():
         ))
 
     else:
-        # СУЩЕСТВУЮЩИЙ ИГРОК: просто обновляем дату хода
         cur.execute("""
             UPDATE players SET last_move_date = ?
             WHERE id = ?
