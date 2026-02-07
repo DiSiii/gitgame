@@ -1,26 +1,19 @@
-# server.py
-from flask import Flask, jsonify, request
 import os
+import json
 import psycopg2
 from psycopg2.extras import RealDictCursor
-import json
-import datetime
+from flask import Flask, request, jsonify
+from datetime import datetime
 
 app = Flask(__name__)
-CORS_ENABLED = True
 
-if CORS_ENABLED:
-    from flask_cors import CORS
-    CORS(app)
-
-# Получаем DATABASE_URL из Render
-DATABASE_URL = os.environ.get("DATABASE_URL")
-if not DATABASE_URL:
-    raise RuntimeError("❌ Переменная DATABASE_URL не задана!")
+# === Настройка базы данных ===
+DATABASE_URL = os.environ.get('DATABASE_URL')
 
 def init_db():
     conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
     with conn.cursor() as cur:
+        # Создаём таблицу, если не существует
         cur.execute("""
             CREATE TABLE IF NOT EXISTS players (
                 id TEXT PRIMARY KEY,
@@ -29,108 +22,102 @@ def init_db():
                 provinces TEXT
             )
         """)
+        
+        # Добавляем колонки ресурсов, если их нет
+        cur.execute("ALTER TABLE players ADD COLUMN IF NOT EXISTS gold INT DEFAULT 500;")
+        cur.execute("ALTER TABLE players ADD COLUMN IF NOT EXISTS wood INT DEFAULT 250;")
+        cur.execute("ALTER TABLE players ADD COLUMN IF NOT EXISTS food INT DEFAULT 1000;")
+        cur.execute("ALTER TABLE players ADD COLUMN IF NOT EXISTS army_power INT DEFAULT 1200;")
+        cur.execute("ALTER TABLE players ADD COLUMN IF NOT EXISTS garrison_power INT DEFAULT 2500;")
+        
         conn.commit()
     conn.close()
 
-init_db()
-
-def get_db():
-    return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
-
 def today():
-    return datetime.date.today().isoformat()
+    return datetime.now().strftime("%Y-%m-%d")
 
-@app.route("/game")
-def get_game():
-    conn = get_db()
+@app.route('/game')
+def get_game_state():
+    conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
     with conn.cursor() as cur:
         cur.execute("SELECT * FROM players")
         rows = cur.fetchall()
-    conn.close()
+        players = {}
+        for row in rows:
+            try:
+                provinces = json.loads(row['provinces'])
+            except:
+                provinces = {"capital": "", "others": []}
+            players[row['id']] = {
+                "name": row['name'],
+                "last_move_date": row['last_move_date'],
+                "provinces": provinces,
+                "gold": row.get('gold', 500),
+                "wood": row.get('wood', 250),
+                "food": row.get('food', 1000),
+                "army_power": row.get('army_power', 1200),
+                "garrison_power": row.get('garrison_power', 2500)
+            }
+        conn.close()
+        return jsonify({
+            "version": 1,
+            "players": players
+        })
 
-    players = {}
-    for row in rows:
-        try:
-            provinces = json.loads(row["provinces"]) if row["provinces"] else None
-        except:
-            provinces = None
-        players[row["id"]] = {
-            "name": row["name"],
-            "last_move_date": row["last_move_date"],
-            "provinces": provinces
-        }
+@app.route('/choose', methods=['POST'])
+def choose_provinces():
+    data = request.json
+    player_id = str(data['player_id'])
+    capital = str(data['capital'])
+    others = [str(x) for x in data['others']]
 
-    return jsonify({"version": 1, "players": players})
-
-@app.route("/submit", methods=["POST"])
-def submit_move():
-    data = request.get_json()
-    if not data or "player_id" not in data:
-        return jsonify({"error": "Missing player_id"}), 400
-
-    player_id = str(data["player_id"])
-    today_str = today()
-
-    conn = get_db()
+    conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
     with conn.cursor() as cur:
-        cur.execute("SELECT provinces FROM players WHERE id = %s", (player_id,))
-        row = cur.fetchone()
+        # Проверяем, существует ли игрок
+        cur.execute("SELECT id FROM players WHERE id = %s", (player_id,))
+        if cur.fetchone():
+            conn.close()
+            return jsonify({"error": "Игрок уже существует"}), 400
 
-        if row is None:
-            # Новый игрок
-            action = data.get("action", {})
-            if action.get("type") != "claim_start_provinces":
-                conn.close()
-                return jsonify({"error": "Новые игроки должны выбрать провинции"}), 400
+        # Создаём нового игрока с ресурсами
+        provinces_data = {"capital": capital, "others": others}
+        cur.execute("""
+            INSERT INTO players (
+                id, name, last_move_date, provinces,
+                gold, wood, food, army_power, garrison_power
+            ) VALUES (
+                %s, %s, %s, %s,
+                %s, %s, %s, %s, %s
+            )
+        """, (
+            player_id,
+            f"Игрок {player_id}",
+            today(),
+            json.dumps(provinces_data),
+            500,   # gold
+            250,   # wood
+            1000,  # food
+            1200,  # army_power
+            2500   # garrison_power
+        ))
+        conn.commit()
+        conn.close()
+        return jsonify({"status": "ok"})
 
-            capital = action.get("capital")
-            others = action.get("others", [])
-            if not capital or len(others) != 2:
-                conn.close()
-                return jsonify({"error": "Требуется столица и 2 соседние провинции"}), 400
+@app.route('/move', methods=['POST'])
+def submit_move():
+    # Заглушка — пока не реализовано
+    return jsonify({"status": "ok"})
 
-            # Проверка занятости
-            cur.execute("SELECT provinces FROM players")
-            all_rows = cur.fetchall()
-            occupied = set()
-            for r in all_rows:
-                if r["provinces"]:
-                    try:
-                        p_data = json.loads(r["provinces"])
-                        occupied.add(p_data["capital"])
-                        occupied.update(p_data["others"])
-                    except:
-                        pass
-
-            conflict = [p for p in [capital] + others if p in occupied]
-            if conflict:
-                conn.close()
-                return jsonify({"error": f"Провинции заняты: {', '.join(conflict)}"}), 400
-
-            provinces_data = {"capital": capital, "others": others}
-            cur.execute("""
-                INSERT INTO players (id, name, last_move_date, provinces)
-                VALUES (%s, %s, %s, %s)
-            """, (player_id, f"Игрок {player_id}", today_str, json.dumps(provinces_data)))
-
-        else:
-            # Существующий игрок
-            cur.execute("""
-                UPDATE players SET last_move_date = %s WHERE id = %s
-            """, (today_str, player_id))
-
-    conn.commit()
-    conn.close()
-    return jsonify({"ok": True})
-
-@app.route("/clear", methods=["POST"])
+@app.route('/clear', methods=['POST'])
 def clear_game():
-    conn = get_db()
+    conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
     with conn.cursor() as cur:
         cur.execute("DELETE FROM players")
-    conn.commit()
+        conn.commit()
     conn.close()
-    return jsonify({"ok": True})
+    return jsonify({"status": "cleared"})
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+if __name__ == '__main__':
+    init_db()
+    app.run(debug=True)
