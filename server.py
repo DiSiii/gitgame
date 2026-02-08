@@ -48,7 +48,6 @@ def get_game_state():
                 provinces = json.loads(row['provinces'])
             except:
                 provinces = {"capital": "", "others": []}
-            # Если army_position пуст — используем столицу
             army_pos = row.get('army_position') or provinces.get("capital", "")
             players[row['id']] = {
                 "name": row['name'],
@@ -94,14 +93,14 @@ def choose_provinces():
         """, (
             player_id,
             f"Игрок {player_id}",
-            "",  # ← НЕ ХОД! Оставляем пустую дату
+            "",  # ← НЕ ХОД!
             json.dumps(provinces_data),
-            500,   # gold
-            250,   # wood
-            1000,  # food
-            1800,  # army_power (3 воина × 600)
-            2500,  # garrison_power
-            capital  # army_position
+            500,
+            250,
+            1000,
+            1800,  # 3 воина × 600
+            2500,
+            capital
         ))
         conn.commit()
         conn.close()
@@ -125,12 +124,10 @@ def game_action():
             conn.close()
             return jsonify({"error": "Игрок не найден"}), 404
 
-        # 🔥 Проверка: уже ходил сегодня?
         if player["last_move_date"] == today():
             conn.close()
             return jsonify({"error": "Вы уже сделали ход сегодня"}), 403
 
-        # Загружаем текущие данные
         provinces = json.loads(player["provinces"])
         gold = player["gold"]
         food = player["food"]
@@ -139,7 +136,6 @@ def game_action():
         garrison_power = player["garrison_power"]
         army_position = player["army_position"] or provinces.get("capital", "")
 
-        # Обработка действий
         act_type = action.get("type")
 
         if act_type == "move_army":
@@ -160,10 +156,10 @@ def game_action():
             conn.close()
             return jsonify({"error": "Неизвестное действие"}), 400
 
-        # 🔥 Сохраняем С ДАТОЙ ХОДА
+        # 🔥 Устанавливаем дату хода
         cur.execute("""
             UPDATE players SET
-                last_move_date = %s,      -- ← УСТАНАВЛИВАЕМ ДАТУ!
+                last_move_date = %s,
                 gold = %s,
                 food = %s,
                 wood = %s,
@@ -173,7 +169,7 @@ def game_action():
                 provinces = %s
             WHERE id = %s
         """, (
-            today(),  # ← только здесь!
+            today(),
             gold,
             food,
             wood,
@@ -186,6 +182,19 @@ def game_action():
         conn.commit()
         conn.close()
         return jsonify({"status": "ok"})
+
+# === DEBUG: сброс хода (временно для тестов) ===
+@app.route('/debug/reset_move_date', methods=['POST'])
+def debug_reset_move_date():
+    data = request.json
+    player_id = str(data.get("player_id"))
+
+    conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+    with conn.cursor() as cur:
+        cur.execute("UPDATE players SET last_move_date = '' WHERE id = %s", (player_id,))
+        conn.commit()
+    conn.close()
+    return jsonify({"status": "ok"})
 
 @app.route('/clear', methods=['POST'])
 def clear_game():
