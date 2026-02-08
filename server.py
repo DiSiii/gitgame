@@ -13,7 +13,6 @@ DATABASE_URL = os.environ.get('DATABASE_URL')
 def init_db():
     conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
     with conn.cursor() as cur:
-        # Таблица игроков
         cur.execute("""
             CREATE TABLE IF NOT EXISTS players (
                 id TEXT PRIMARY KEY,
@@ -48,7 +47,6 @@ def get_game_state():
                 provinces = json.loads(row['provinces'])
             except:
                 provinces = {"capital": "", "others": []}
-            # Если army_position пуст — ставим столицу
             army_pos = row.get('army_position') or provinces.get("capital", "")
             players[row['id']] = {
                 "name": row['name'],
@@ -67,6 +65,7 @@ def get_game_state():
             "players": players
         })
 
+# === ВЫБОР НАЧАЛЬНЫХ ПРОВИНЦИЙ ===
 @app.route('/choose', methods=['POST'])
 def choose_provinces():
     data = request.json
@@ -95,22 +94,26 @@ def choose_provinces():
             f"Игрок {player_id}",
             today(),
             json.dumps(provinces_data),
-            500,   # gold
-            250,   # wood
-            1000,  # food
-            1800,  # army_power ← 3 воина по 600
-            2500,  # garrison_power
-            capital  # army_position ← изначально в столице
+            500,
+            250,
+            1000,
+            1800,  # 3 воина × 600
+            2500,
+            capital  # армия в столице
         ))
         conn.commit()
         conn.close()
         return jsonify({"status": "ok"})
 
-@app.route('/submit', methods=['POST'])
-def submit_move():
+# === ЛЮБОЕ ИГРОВОЕ ДЕЙСТВИЕ ===
+@app.route('/action', methods=['POST'])
+def game_action():
     data = request.json
     player_id = str(data.get("player_id"))
     action = data.get("action", {})
+
+    if not action:
+        return jsonify({"error": "Нет действия"}), 400
 
     conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
     with conn.cursor() as cur:
@@ -124,7 +127,7 @@ def submit_move():
             conn.close()
             return jsonify({"error": "Вы уже сделали ход сегодня"}), 403
 
-        # Загружаем текущие данные
+        # Загружаем данные
         provinces = json.loads(player["provinces"])
         gold = player["gold"]
         food = player["food"]
@@ -133,21 +136,30 @@ def submit_move():
         garrison_power = player["garrison_power"]
         army_position = player["army_position"] or provinces.get("capital", "")
 
-        # Применяем действие
-        if action:
-            act_type = action.get("type")
-            if act_type == "move_army":
-                army_position = str(action["to_province"])
-                army_power = int(action.get("army_power", army_power))
-            elif act_type == "capture_province":
-                prov = str(action["province"])
-                if prov != provinces.get("capital") and prov not in provinces.get("others", []):
-                    provinces["others"].append(prov)
-                army_position = prov
-                army_power = int(action.get("army_power", army_power))
-            # Можно добавить другие действия: "recruit", "build" и т.д.
+        # === ОБРАБОТКА ДЕЙСТВИЙ ===
+        act_type = action.get("type")
 
-        # Сохраняем всё
+        if act_type == "move_army":
+            to_province = str(action["to_province"])
+            new_army_power = int(action.get("army_power", army_power))
+            # Проверка: можно ли туда идти? (опционально)
+            army_position = to_province
+            army_power = new_army_power
+
+        elif act_type == "capture_province":
+            prov = str(action["province"])
+            new_army_power = int(action.get("army_power", army_power))
+            # Добавляем провинцию, если её нет
+            if prov != provinces.get("capital") and prov not in provinces.get("others", []):
+                provinces["others"].append(prov)
+            army_position = prov
+            army_power = new_army_power
+
+        else:
+            conn.close()
+            return jsonify({"error": "Неизвестное действие"}), 400
+
+        # === СОХРАНЕНИЕ ===
         cur.execute("""
             UPDATE players SET
                 last_move_date = %s,
