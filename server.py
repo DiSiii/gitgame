@@ -13,7 +13,6 @@ DATABASE_URL = os.environ.get('DATABASE_URL')
 def init_db():
     conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
     with conn.cursor() as cur:
-        # Таблица игроков
         cur.execute("""
             CREATE TABLE IF NOT EXISTS players (
                 id TEXT PRIMARY KEY,
@@ -22,11 +21,9 @@ def init_db():
                 provinces TEXT
             )
         """)
-        # Ресурсы
         cur.execute("ALTER TABLE players ADD COLUMN IF NOT EXISTS gold INT DEFAULT 500;")
         cur.execute("ALTER TABLE players ADD COLUMN IF NOT EXISTS wood INT DEFAULT 250;")
         cur.execute("ALTER TABLE players ADD COLUMN IF NOT EXISTS food INT DEFAULT 1000;")
-        # Армия
         cur.execute("ALTER TABLE players ADD COLUMN IF NOT EXISTS army_power INT DEFAULT 1800;")
         cur.execute("ALTER TABLE players ADD COLUMN IF NOT EXISTS garrison_power INT DEFAULT 2500;")
         cur.execute("ALTER TABLE players ADD COLUMN IF NOT EXISTS army_position TEXT;")
@@ -66,21 +63,44 @@ def get_game_state():
             "players": players
         })
 
-# === ВЫБОР НАЧАЛЬНЫХ ПРОВИНЦИЙ (НЕ ХОД!) ===
+# === ВЫБОР ПРОВИНЦИЙ С ПРОВЕРКОЙ КОНФЛИКТОВ ===
 @app.route('/choose', methods=['POST'])
 def choose_provinces():
     data = request.json
     player_id = str(data['player_id'])
     capital = str(data['capital'])
     others = [str(x) for x in data['others']]
+    all_provinces = [capital] + others
 
     conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
     with conn.cursor() as cur:
+        # Игрок уже существует?
         cur.execute("SELECT id FROM players WHERE id = %s", (player_id,))
         if cur.fetchone():
             conn.close()
             return jsonify({"error": "Игрок уже существует"}), 400
 
+        # Собираем все занятые провинции
+        cur.execute("SELECT provinces FROM players")
+        rows = cur.fetchall()
+        occupied = set()
+        for row in rows:
+            try:
+                prov = json.loads(row['provinces'])
+                if prov.get("capital"):
+                    occupied.add(str(prov["capital"]))
+                for p in prov.get("others", []):
+                    occupied.add(str(p))
+            except:
+                pass
+
+        # Проверяем каждую провинцию
+        for pid in all_provinces:
+            if pid in occupied:
+                conn.close()
+                return jsonify({"error": f"Провинция {pid} уже занята"}), 409
+
+        # Создаём игрока
         provinces_data = {"capital": capital, "others": others}
         cur.execute("""
             INSERT INTO players (
@@ -93,12 +113,12 @@ def choose_provinces():
         """, (
             player_id,
             f"Игрок {player_id}",
-            "",  # ← НЕ ХОД!
+            "",
             json.dumps(provinces_data),
             500,
             250,
             1000,
-            1800,  # 3 воина × 600
+            1800,
             2500,
             capital
         ))
@@ -106,7 +126,7 @@ def choose_provinces():
         conn.close()
         return jsonify({"status": "ok"})
 
-# === ЛЮБОЙ ИГРОВОЙ ХОД (СЧИТАЕТСЯ ЗА ХОД!) ===
+# === ИГРОВЫЕ ДЕЙСТВИЯ ===
 @app.route('/action', methods=['POST'])
 def game_action():
     data = request.json
@@ -156,7 +176,6 @@ def game_action():
             conn.close()
             return jsonify({"error": "Неизвестное действие"}), 400
 
-        # 🔥 Устанавливаем дату хода
         cur.execute("""
             UPDATE players SET
                 last_move_date = %s,
@@ -183,7 +202,7 @@ def game_action():
         conn.close()
         return jsonify({"status": "ok"})
 
-# === DEBUG: сброс хода (временно для тестов) ===
+# === DEBUG: сброс хода ===
 @app.route('/debug/reset_move_date', methods=['POST'])
 def debug_reset_move_date():
     data = request.json
