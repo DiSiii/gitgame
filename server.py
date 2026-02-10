@@ -6,6 +6,8 @@ from psycopg2.extras import RealDictCursor
 from flask import Flask, request, jsonify
 from datetime import datetime
 
+print("сервер запущен!!!!!!!!")
+
 app = Flask(__name__)
 
 DATABASE_URL = os.environ.get('DATABASE_URL')
@@ -250,3 +252,4 @@ if __name__ == '__main__':
     init_db()
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port, debug=False)
+
