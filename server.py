@@ -133,8 +133,6 @@ def game_action():
     player_id = str(data.get("player_id"))
     action = data.get("action", {})
 
-    # 🔥 УДАЛЕНА ПРОВЕРКА "if not action"
-
     conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
     with conn.cursor() as cur:
         cur.execute("SELECT * FROM players WHERE id = %s", (player_id,))
@@ -157,33 +155,43 @@ def game_action():
 
         act_type = action.get("type") if action else None
 
+        # 🔍 ОТЛАДКА: начальное состояние
+        print(f"DEBUG: Игрок {player_id}, действие: {act_type}")
+        print(f"DEBUG: До: армия={army_power}, позиция={army_position}, провинции={provinces}")
+
         if act_type == "move_army":
             to_province = str(action["to_province"])
             new_army_power = int(action.get("army_power", army_power))
             army_position = to_province
             army_power = new_army_power
+            print(f"DEBUG: Перемещение в {to_province}, новая армия={army_power}")
 
         elif act_type == "capture_province":
             prov = str(action["province"])
             new_army_power = int(action.get("army_power", army_power))
+            
+            # Добавляем провинцию, если её нет
             if prov != provinces.get("capital") and prov not in provinces.get("others", []):
                 provinces["others"].append(prov)
+                print(f"DEBUG: Захват провинции {prov}")
+            else:
+                print(f"DEBUG: Провинция {prov} уже принадлежит игроку")
+            
             army_position = prov
             army_power = new_army_power
+            print(f"DEBUG: После захвата: армия={army_power}, позиция={army_position}")
 
         elif act_type == "idle":
-            # Просто ход без изменений
-            pass
+            print("DEBUG: Простой ход (idle)")
 
         elif not action or act_type is None:
-            # Пустое действие — тоже просто ход
-            pass
+            print("DEBUG: Пустое действие — простой ход")
 
         else:
             conn.close()
             return jsonify({"error": "Неизвестное действие"}), 400
 
-        # 🔥 Сохраняем с датой хода
+        # 🔥 Сохраняем изменения
         cur.execute("""
             UPDATE players SET
                 last_move_date = %s,
@@ -208,6 +216,10 @@ def game_action():
         ))
         conn.commit()
         conn.close()
+
+        # 🔍 ОТЛАДКА: финальное состояние
+        print(f"DEBUG: Успешно обновлено для игрока {player_id}")
+        print(f"DEBUG: После: армия={army_power}, позиция={army_position}, провинции={provinces}")
         return jsonify({"status": "ok"})
 
 # === DEBUG: сброс хода ===
@@ -221,6 +233,7 @@ def debug_reset_move_date():
         cur.execute("UPDATE players SET last_move_date = '' WHERE id = %s", (player_id,))
         conn.commit()
     conn.close()
+    print(f"DEBUG: Сброшен ход для игрока {player_id}")
     return jsonify({"status": "ok"})
 
 @app.route('/clear', methods=['POST'])
@@ -230,6 +243,7 @@ def clear_game():
         cur.execute("DELETE FROM players")
         conn.commit()
     conn.close()
+    print("DEBUG: Игра очищена")
     return jsonify({"status": "cleared"})
 
 if __name__ == '__main__':
