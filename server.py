@@ -133,8 +133,7 @@ def game_action():
     player_id = str(data.get("player_id"))
     action = data.get("action", {})
 
-    if not action:
-        return jsonify({"error": "Нет действия"}), 400
+    # 🔥 УДАЛЕНА ПРОВЕРКА "if not action"
 
     conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
     with conn.cursor() as cur:
@@ -156,7 +155,7 @@ def game_action():
         garrison_power = player["garrison_power"]
         army_position = player["army_position"] or provinces.get("capital", "")
 
-        act_type = action.get("type")
+        act_type = action.get("type") if action else None
 
         if act_type == "move_army":
             to_province = str(action["to_province"])
@@ -172,10 +171,19 @@ def game_action():
             army_position = prov
             army_power = new_army_power
 
+        elif act_type == "idle":
+            # Просто ход без изменений
+            pass
+
+        elif not action or act_type is None:
+            # Пустое действие — тоже просто ход
+            pass
+
         else:
             conn.close()
             return jsonify({"error": "Неизвестное действие"}), 400
 
+        # 🔥 Сохраняем с датой хода
         cur.execute("""
             UPDATE players SET
                 last_move_date = %s,
