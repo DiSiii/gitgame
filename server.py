@@ -1,4 +1,6 @@
 # server.py
+import logging
+logging.basicConfig(level=logging.INFO)
 import os
 import json
 import psycopg2
@@ -135,16 +137,20 @@ def game_action():
     player_id = str(data.get("player_id"))
     action = data.get("action", {})
 
+    app.logger.info(f"📥 Запрос /action от игрока {player_id}, действие: {action}")
+
     conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
     with conn.cursor() as cur:
         cur.execute("SELECT * FROM players WHERE id = %s", (player_id,))
         player = cur.fetchone()
         if not player:
             conn.close()
+            app.logger.error(f"❌ Игрок {player_id} не найден")
             return jsonify({"error": "Игрок не найден"}), 404
 
         if player["last_move_date"] == today():
             conn.close()
+            app.logger.warning(f"⚠️ Игрок {player_id} уже сделал ход сегодня")
             return jsonify({"error": "Вы уже сделали ход сегодня"}), 403
 
         provinces = json.loads(player["provinces"])
@@ -157,43 +163,40 @@ def game_action():
 
         act_type = action.get("type") if action else None
 
-        # 🔍 ОТЛАДКА: начальное состояние
-        print(f"DEBUG: Игрок {player_id}, действие: {act_type}")
-        print(f"DEBUG: До: армия={army_power}, позиция={army_position}, провинции={provinces}")
+        app.logger.info(f"➡️ Обработка действия: {act_type}")
+        app.logger.info(f"   Состояние до: армия={army_power}, позиция={army_position}, провинции={provinces}")
 
         if act_type == "move_army":
             to_province = str(action["to_province"])
             new_army_power = int(action.get("army_power", army_power))
             army_position = to_province
             army_power = new_army_power
-            print(f"DEBUG: Перемещение в {to_province}, новая армия={army_power}")
+            app.logger.info(f"   Перемещение в {to_province}, новая армия={army_power}")
 
         elif act_type == "capture_province":
             prov = str(action["province"])
             new_army_power = int(action.get("army_power", army_power))
-            
-            # Добавляем провинцию, если её нет
             if prov != provinces.get("capital") and prov not in provinces.get("others", []):
                 provinces["others"].append(prov)
-                print(f"DEBUG: Захват провинции {prov}")
+                app.logger.info(f"   Захват провинции {prov}")
             else:
-                print(f"DEBUG: Провинция {prov} уже принадлежит игроку")
-            
+                app.logger.info(f"   Провинция {prov} уже принадлежит игроку")
             army_position = prov
             army_power = new_army_power
-            print(f"DEBUG: После захвата: армия={army_power}, позиция={army_position}")
+            app.logger.info(f"   После: армия={army_power}, позиция={army_position}")
 
         elif act_type == "idle":
-            print("DEBUG: Простой ход (idle)")
+            app.logger.info("   Простой ход (idle)")
 
         elif not action or act_type is None:
-            print("DEBUG: Пустое действие — простой ход")
+            app.logger.info("   Пустое действие — простой ход")
 
         else:
             conn.close()
+            app.logger.error(f"❌ Неизвестное действие: {act_type}")
             return jsonify({"error": "Неизвестное действие"}), 400
 
-        # 🔥 Сохраняем изменения
+        # Сохраняем
         cur.execute("""
             UPDATE players SET
                 last_move_date = %s,
@@ -219,9 +222,7 @@ def game_action():
         conn.commit()
         conn.close()
 
-        # 🔍 ОТЛАДКА: финальное состояние
-        print(f"DEBUG: Успешно обновлено для игрока {player_id}")
-        print(f"DEBUG: После: армия={army_power}, позиция={army_position}, провинции={provinces}")
+        app.logger.info(f"✅ Успешно обновлено игрок {player_id}")
         return jsonify({"status": "ok"})
 
 # === DEBUG: сброс хода ===
@@ -252,4 +253,5 @@ if __name__ == '__main__':
     init_db()
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port, debug=False)
+
 
