@@ -153,6 +153,7 @@ def game_action():
             app.logger.warning(f"⚠️ Игрок {player_id} уже сделал ход сегодня")
             return jsonify({"error": "Вы уже сделали ход сегодня"}), 403
 
+        # Загружаем текущее состояние
         provinces = json.loads(player["provinces"])
         gold = player["gold"]
         food = player["food"]
@@ -176,14 +177,22 @@ def game_action():
         elif act_type == "capture_province":
             prov = str(action["province"])
             new_army_power = int(action.get("army_power", army_power))
-            if prov != provinces.get("capital") and prov not in provinces.get("others", []):
-                provinces["others"].append(prov)
-                app.logger.info(f"   Захват провинции {prov}")
-            else:
-                app.logger.info(f"   Провинция {prov} уже принадлежит игроку")
+            
+            # 🔥 НАДЕЖНОЕ ОБНОВЛЕНИЕ PROVINCES
+            current_capital = provinces.get("capital", "")
+            current_others = provinces.get("others", [])
+            if prov != current_capital and prov not in current_others:
+                current_others = current_others + [prov]  # создаём новый список
+            
+            # Пересоздаём provinces как новый словарь
+            provinces = {
+                "capital": current_capital,
+                "others": current_others
+            }
+            
             army_position = prov
             army_power = new_army_power
-            app.logger.info(f"   После: армия={army_power}, позиция={army_position}")
+            app.logger.info(f"   Захват: {prov}, новая армия={army_power}, провинции={provinces}")
 
         elif act_type == "idle":
             app.logger.info("   Простой ход (idle)")
@@ -196,7 +205,7 @@ def game_action():
             app.logger.error(f"❌ Неизвестное действие: {act_type}")
             return jsonify({"error": "Неизвестное действие"}), 400
 
-        # Сохраняем
+        # 🔥 ГАРАНТИРОВАННОЕ СОХРАНЕНИЕ ВСЕХ ПОЛЕЙ
         cur.execute("""
             UPDATE players SET
                 last_move_date = %s,
@@ -236,7 +245,7 @@ def debug_reset_move_date():
         cur.execute("UPDATE players SET last_move_date = '' WHERE id = %s", (player_id,))
         conn.commit()
     conn.close()
-    print(f"DEBUG: Сброшен ход для игрока {player_id}")
+    app.logger.info(f"DEBUG: Сброшен ход для игрока {player_id}")
     return jsonify({"status": "ok"})
 
 @app.route('/clear', methods=['POST'])
@@ -246,12 +255,10 @@ def clear_game():
         cur.execute("DELETE FROM players")
         conn.commit()
     conn.close()
-    print("DEBUG: Игра очищена")
+    app.logger.info("DEBUG: Игра очищена")
     return jsonify({"status": "cleared"})
 
 if __name__ == '__main__':
     init_db()
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port, debug=False)
-
-
