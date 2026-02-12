@@ -195,7 +195,10 @@ def game_action():
             app.logger.info(f"   Захват: {prov}, новая армия={army_power}, провинции={provinces}")
 
         elif act_type == "idle":
-            app.logger.info("   Простой ход (idle)")
+            # Обновляем армию, если передана
+            if "army_power" in action:
+                army_power = int(action["army_power"])
+            app.logger.info(f"   Простой ход, армия={army_power}")
 
         elif not action or act_type is None:
             app.logger.info("   Пустое действие — простой ход")
@@ -262,3 +265,4 @@ if __name__ == '__main__':
     init_db()
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port, debug=False)
+
