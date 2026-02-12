@@ -84,7 +84,7 @@ def get_game_state():
         return jsonify({
             "version": 1,
             "players": players,
-            "monsters": monsters  # ← НОВОЕ ПОЛЕ
+            "monsters": monsters
         })
 
 # === ВЫБОР ПРОВИНЦИЙ С ПРОВЕРКОЙ КОНФЛИКТОВ ===
@@ -225,19 +225,19 @@ def game_action():
             cur.execute("DELETE FROM monsters WHERE province_id = %s", (prov,))
 
         elif act_type == "fight_monster":
-            # Новое действие для боя с монстром
-            prov = str(action["province"])
-            my_army = int(action["my_army"])
-            enemy_power = int(action["enemy_power"])
-            my_loss = int(action["my_loss"])
-            monster_remaining = int(action["monster_remaining"])
-
-            new_army = max(1, my_army - my_loss)
+            # 🔥 ОБРАБОТКА БОЯ С МОНСТРОМ
+            prov = str(action.get("province", ""))
+            my_army = int(action.get("my_army", army_power))
+            my_loss = int(action.get("my_loss", 0))
+            
+            # Разрешаем армию = 0 (если хочешь минимум 1 — замени на max(1, ...))
+            new_army = max(0, my_army - my_loss)
             army_power = new_army
             army_position = prov
-
+            
+            # Обновляем монстра
+            monster_remaining = int(action.get("monster_remaining", 0))
             if monster_remaining > 0:
-                # Обновляем/вставляем монстра
                 cur.execute("""
                     INSERT INTO monsters (province_id, current_power)
                     VALUES (%s, %s)
@@ -245,7 +245,6 @@ def game_action():
                 """, (prov, monster_remaining, monster_remaining))
                 app.logger.info(f"   Монстр ранен: {prov} -> {monster_remaining}")
             else:
-                # Монстр убит
                 cur.execute("DELETE FROM monsters WHERE province_id = %s", (prov,))
                 app.logger.info(f"   Монстр убит: {prov}")
 
@@ -310,7 +309,7 @@ def clear_game():
     conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
     with conn.cursor() as cur:
         cur.execute("DELETE FROM players")
-        cur.execute("DELETE FROM monsters")  # ← ОЧИЩАЕМ МОНСТРОВ
+        cur.execute("DELETE FROM monsters")
         conn.commit()
     conn.close()
     app.logger.info("DEBUG: Игра очищена")
