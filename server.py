@@ -17,6 +17,7 @@ DATABASE_URL = os.environ.get('DATABASE_URL')
 def init_db():
     conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
     with conn.cursor() as cur:
+        # Игроки
         cur.execute("""
             CREATE TABLE IF NOT EXISTS players (
                 id TEXT PRIMARY KEY,
@@ -31,6 +32,15 @@ def init_db():
         cur.execute("ALTER TABLE players ADD COLUMN IF NOT EXISTS army_power INT DEFAULT 1800;")
         cur.execute("ALTER TABLE players ADD COLUMN IF NOT EXISTS garrison_power INT DEFAULT 2500;")
         cur.execute("ALTER TABLE players ADD COLUMN IF NOT EXISTS army_position TEXT;")
+
+        # Монстры
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS monsters (
+                province_id TEXT PRIMARY KEY,
+                current_power INT NOT NULL
+            )
+        """)
+
         conn.commit()
     conn.close()
 
@@ -41,6 +51,7 @@ def today():
 def get_game_state():
     conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
     with conn.cursor() as cur:
+        # Игроки
         cur.execute("SELECT * FROM players")
         rows = cur.fetchall()
         players = {}
@@ -61,10 +72,19 @@ def get_game_state():
                 "garrison_power": row.get('garrison_power', 2500),
                 "army_position": army_pos
             }
+
+        # Монстры
+        cur.execute("SELECT province_id, current_power FROM monsters")
+        monster_rows = cur.fetchall()
+        monsters = {}
+        for row in monster_rows:
+            monsters[row['province_id']] = row['current_power']
+
         conn.close()
         return jsonify({
             "version": 1,
-            "players": players
+            "players": players,
+            "monsters": monsters  # ← НОВОЕ ПОЛЕ
         })
 
 # === ВЫБОР ПРОВИНЦИЙ С ПРОВЕРКОЙ КОНФЛИКТОВ ===
@@ -84,10 +104,12 @@ def choose_provinces():
             conn.close()
             return jsonify({"error": "Игрок уже существует"}), 400
 
-        # Собираем все занятые провинции
+        # Собираем все занятые провинции (игроки + монстры)
+        occupied = set()
+
+        # Игроки
         cur.execute("SELECT provinces FROM players")
         rows = cur.fetchall()
-        occupied = set()
         for row in rows:
             try:
                 prov = json.loads(row['provinces'])
@@ -97,6 +119,12 @@ def choose_provinces():
                     occupied.add(str(p))
             except:
                 pass
+
+        # Монстры
+        cur.execute("SELECT province_id FROM monsters")
+        monster_rows = cur.fetchall()
+        for row in monster_rows:
+            occupied.add(str(row['province_id']))
 
         # Проверяем каждую провинцию
         for pid in all_provinces:
@@ -178,13 +206,12 @@ def game_action():
             prov = str(action["province"])
             new_army_power = int(action.get("army_power", army_power))
             
-            # 🔥 НАДЕЖНОЕ ОБНОВЛЕНИЕ PROVINCES
+            # НАДЕЖНОЕ ОБНОВЛЕНИЕ PROVINCES
             current_capital = provinces.get("capital", "")
             current_others = provinces.get("others", [])
             if prov != current_capital and prov not in current_others:
-                current_others = current_others + [prov]  # создаём новый список
+                current_others = current_others + [prov]
             
-            # Пересоздаём provinces как новый словарь
             provinces = {
                 "capital": current_capital,
                 "others": current_others
@@ -194,8 +221,35 @@ def game_action():
             army_power = new_army_power
             app.logger.info(f"   Захват: {prov}, новая армия={army_power}, провинции={provinces}")
 
+            # Удаляем монстра, если он был
+            cur.execute("DELETE FROM monsters WHERE province_id = %s", (prov,))
+
+        elif act_type == "fight_monster":
+            # Новое действие для боя с монстром
+            prov = str(action["province"])
+            my_army = int(action["my_army"])
+            enemy_power = int(action["enemy_power"])
+            my_loss = int(action["my_loss"])
+            monster_remaining = int(action["monster_remaining"])
+
+            new_army = max(1, my_army - my_loss)
+            army_power = new_army
+            army_position = prov
+
+            if monster_remaining > 0:
+                # Обновляем/вставляем монстра
+                cur.execute("""
+                    INSERT INTO monsters (province_id, current_power)
+                    VALUES (%s, %s)
+                    ON CONFLICT (province_id) DO UPDATE SET current_power = %s
+                """, (prov, monster_remaining, monster_remaining))
+                app.logger.info(f"   Монстр ранен: {prov} -> {monster_remaining}")
+            else:
+                # Монстр убит
+                cur.execute("DELETE FROM monsters WHERE province_id = %s", (prov,))
+                app.logger.info(f"   Монстр убит: {prov}")
+
         elif act_type == "idle":
-            # Обновляем армию, если передана
             if "army_power" in action:
                 army_power = int(action["army_power"])
             app.logger.info(f"   Простой ход, армия={army_power}")
@@ -208,7 +262,7 @@ def game_action():
             app.logger.error(f"❌ Неизвестное действие: {act_type}")
             return jsonify({"error": "Неизвестное действие"}), 400
 
-        # 🔥 ГАРАНТИРОВАННОЕ СОХРАНЕНИЕ ВСЕХ ПОЛЕЙ
+        # ГАРАНТИРОВАННОЕ СОХРАНЕНИЕ
         cur.execute("""
             UPDATE players SET
                 last_move_date = %s,
@@ -256,6 +310,7 @@ def clear_game():
     conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
     with conn.cursor() as cur:
         cur.execute("DELETE FROM players")
+        cur.execute("DELETE FROM monsters")  # ← ОЧИЩАЕМ МОНСТРОВ
         conn.commit()
     conn.close()
     app.logger.info("DEBUG: Игра очищена")
@@ -265,4 +320,3 @@ if __name__ == '__main__':
     init_db()
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port, debug=False)
-
